@@ -9,13 +9,13 @@ from collections import namedtuple, deque
 from DeepQAgent.QNetwork import QNetwork
 
 # H-parameters & Fixed Setup params
-BUFFER_SIZE = int(3*1e5)# size of the memory buffer
+BUFFER_SIZE = int(6*1e3)# size of the memory buffer
 PRIORITY_BIAS = 0.0005  # bias added to prioriy to avoid zero priority
-SAMPLE_SIZE = 128       # size of sample from the buffer memory
+SAMPLE_SIZE = 64        # size of sample from the buffer memory
 
-GAMMA = 0.99            # discount factor
-TAU = 1e-3              # for soft update of target parameters
-LR = 5e-4               # learning rate 
+GAMMA = 0.95            # discount factor
+TAU = 5e-3              # for soft update of target parameters
+LR = 5e-3               # learning rate 
 UPDATE_TSTEP = 8        # number of time_steps after which we update the QNetwork
 
 
@@ -45,8 +45,8 @@ class Agent():
         self.qnet_target = QNetwork(self.state_size, self.action_size, self.seed).to(self.device) # Target network  
         
         # get the optimizer
-        self.optimizer = optim.RMSprop( self.qnet_local.parameters(), lr=0.01, alpha=0.99, eps=1e-06,
-                                        weight_decay=0.2, momentum=0, centered=True
+        self.optimizer = optim.RMSprop( self.qnet_local.parameters(), lr=LR, alpha=0.99, eps=5e-07,
+                                        weight_decay=0.05, momentum=0.25, centered=False
                                       )
         
         # Instantiate the Replay Buffer
@@ -66,8 +66,8 @@ class Agent():
                 
             Returns:
                 Tuple of : 
-                        > Discrete Action taken by the Agent according to the policy
-                        > Action-Value of the chosen action by the Agent
+                        > Discrete Action taken by the Agent according to the policy : int
+                        > Action-Value of the chosen action by the Agent : float
         """
         state = torch.from_numpy( np.array(state) ).float().unsqueeze(0).to(self.device)
         
@@ -92,23 +92,38 @@ class Agent():
             # Explore different values
             agent_action_step = np.random.choice(np.arange(self.action_size))
             
-        return ( agent_action_step, action_values )
+        return ( agent_action_step.astype('int32'), action_values.cpu().data.numpy()[0][agent_action_step] )
 
-    def step(self, target, estimate, state, action, reward, next_state, done):
+    def step(self, estimate, state, action, reward, next_state, done):
         """
             Performs Adding the experience tuple obtained from the environment to the Replay Buffer
             & initiating QNetwork train and update of target Q Network
             
             Args:
-                target: float -> target Q-value for state, action pair
                 estimate: float -> observed Q-value for state-action pair
                 
-                state: torch.tensor -> tensor which represents the current state
+                state: numpy.array() / torch.tensor -> tensor/array which represents the current state
                 action: int -> action taken by the Agent
                 reward: float -> reward value obtained by the Agent
-                next_state: torch.tensor -> tensor representing the next state
+                next_state: numpy.array() / torch.tensor -> tensor/array representing the next state
                 done: bool -> boolean value represnting if the Episode has completed / terminal state has been reached
         """
+        
+        next_state = torch.from_numpy( np.array(next_state) ).float().unsqueeze(0).to(self.device)
+        target = torch.tensor([]).float()
+        
+        # Compute the Q-target from the 'reward' and 'next_state' values
+        self.qnet_target.eval()  # set the Target Network in Evaluation Mode
+        
+        with torch.no_grad():
+            target = self.qnet_target(next_state) # return a tensor with action values for all discrete actions
+            target = target.cpu().data.numpy().max() # Greedy --> Taking max value from the Target Network
+  
+        self.qnet_target.train() # set the Target network back into Train Mode
+        
+        # convert 'next_state''back to np.ndarray
+        next_state = next_state.cpu().data.numpy(); # print(next_state.shape)
+        
         # Include the experience tuple into the Replay-Buffer
         self.buffer.add_exp( target, estimate, state, action, reward, next_state, done )
         
@@ -119,7 +134,8 @@ class Agent():
         if (self.t_step == 0) and (SAMPLE_SIZE <= len(self.buffer) ):
             # if 'UPDATE_TSTEP' number of timesteps have elapsed - Update the Network
             # if enough samples are present in the Replay Buffer -> initiate QNetwork Learning
-            print('Triggering Learn | Buffer Size: {} | t: {}'.format(len(self.buffer),self.t_step))
+            
+            # print('Triggering Learn | Buffer Size: {} | t: {}'.format(len(self.buffer),self.t_step))
             
             experiences = self.buffer.sample()  # take a sample from the Buffer
             self.learn(experiences, self.gamma)
@@ -151,7 +167,7 @@ class Agent():
         bias = ((1/len(self.buffer))*(1/exp_p))**hparam_b
         
         # MSE-LOSS with Priority-Bias adjustment
-        loss = torch.mean(loss*bias); print(loss)
+        loss = torch.mean(loss*bias); # print(loss)
         
         # Minimize the loss
         self.optimizer.zero_grad()
@@ -194,6 +210,8 @@ class ExpBuffer():
         self.seed = seed
         self.device = device
         
+        self.release_mem_size = self.sample_size//2
+        
     def __len__(self):
         """
             return the length of the Replay Buffer - the number of experience tuples inside 
@@ -235,8 +253,9 @@ class ExpBuffer():
         # find the delta for the new tuple
         new_delta = (abs(estimate - target) + PRIORITY_BIAS) # bias added to prevent zero value
         
-        # include it into the current store of delta values
+        # If there is a memory overflow - only retain the ones with highest 'priority'
         if len(self.delta) == BUFFER_SIZE:
+            """
             # pop the one with least value of delta -> find the index with least value
             idx, min_d = 0, float('inf')
             
@@ -248,7 +267,12 @@ class ExpBuffer():
             
             del self.delta[idx]  # delete the specific delta value
             del self.memory[idx] # also delete corresponding experience tuple
+            """
+            # Delete 'self.release_mem_size' equivalent items from memory for the smallest values of 'priority'
+            self.memory = deque( sorted(self.memory, key = lambda m: m.priority)[-self.release_mem_size:], maxlen = BUFFER_SIZE )
+            self.delta = deque( sorted(self.delta)[-self.release_mem_size:], maxlen = BUFFER_SIZE )
             
+        # include 'delta' into the current store of delta values
         self.delta.append(new_delta)
         
         # compute the Priority values
@@ -270,7 +294,7 @@ class ExpBuffer():
         # self.priorities[-1] = self.priorities[-1].detach().cpu();
         self.priorities[-1] = np.round( self.priorities[-1], decimals = 10 ); # print(self.priorities[-1])
         self.memory.append( self.experience( state, action, reward, next_state, done, self.priorities[-1] )
-                          )
+                          )   
         
     def get_priorities(self):
         """
