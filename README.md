@@ -13,7 +13,12 @@ The objective is to train an <em>Reinforcement Learning Agent</em> to autonomous
 
 <h2>RL Environment</h2>
 
-The simulated environment contains a <b>single</b> agent which navigates in the enclosed world with the task of maximizing the number of <b>Yellow</b> bananas collected while <em>minimizing / avoiding</em> the number of <b>Blue</b> bananas gathered. The state of the Environment is also synced with the Episodic nature of the task — each Episode is defined by 300 timesteps.
+The simulated environment contains a <b>single</b> agent which navigates in the enclosed world with the task of maximizing the number of <b>Yellow</b> bananas collected while <em>minimizing / avoiding</em> the number of <b>Blue</b> bananas gathered. The state of the Environment is also synced with the Episodic nature of the task — each Episode is defined by <b>300 timesteps</b>. At each timestep, the Agent can pick exactly one action from all the possible actions in <em>Action-Space</em>.
+
+<p align="center">
+  <img src="./RL_Navigation_Agent_Action_Heatmap.png" />
+  <br><em>Average Freq. of Action choice (action-labels: 0,1,2,3) per action for the Agent for each timestep in an Episode</em>
+</p>
 
 <h3><em>State-Action Space</em></h3>
 
